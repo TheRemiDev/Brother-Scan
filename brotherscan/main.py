@@ -17,7 +17,7 @@ from starlette.concurrency import run_in_threadpool
 
 from . import __version__, auth, pdftools
 from .config import load_config
-from .mailer import MailWorker, send_pdf
+from .mailer import MailWorker, describe_smtp_error, send_pdf
 from .settings import Settings, valid_email
 from .store import Scan, Store
 
@@ -287,7 +287,7 @@ async def send(scan_id: str, body: SendBody):
                                 store.pdf_path(scan.id).read_bytes())
     except Exception as exc:
         log.exception("Envoi impossible")
-        raise HTTPException(502, "L'envoi a échoué. Vérifiez la configuration e-mail.") from exc
+        raise HTTPException(502, f"L'envoi a échoué : {describe_smtp_error(exc)}") from exc
     log.info("Document %s envoyé à %d destinataire(s)", scan.id, len(recipients))
     return {"ok": True}
 

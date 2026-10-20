@@ -139,6 +139,19 @@ def test_expiry_and_merge():
         assert store.pdf_path(a.id).exists()
 
 
+def test_sender_identity():
+    with tempfile.TemporaryDirectory() as tmp:
+        cfg, _ = setup(tmp)
+        cases = {
+            "Scanner - Rémi VIDON": ("Scanner - Rémi VIDON", "scan@remividon.fr"),  # nom seul
+            "Scan <scan@remividon.fr>": ("Scan", "scan@remividon.fr"),
+            "autre@remividon.fr": ("", "autre@remividon.fr"),
+        }
+        for raw, expected in cases.items():
+            c = cfg.__class__(**{**cfg.__dict__, "smtp_from": raw, "smtp_user": "scan@remividon.fr"})
+            assert mailer.sender_identity(c) == expected, raw
+
+
 def test_pin_and_sessions():
     stored = hash_pin("une phrase très longue avec des espaces 🙂")
     assert check_pin("une phrase très longue avec des espaces 🙂", stored)
