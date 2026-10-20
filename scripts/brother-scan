@@ -1,0 +1,139 @@
+#!/usr/bin/env bash
+# Brother Scan — commande d'administration (installée dans /usr/local/bin/brother-scan)
+set -Eeuo pipefail
+
+INSTALL_DIR="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
+ENV_FILE="/etc/brother-scan/brother-scan.env"
+SERVICE="brother-scan"
+APP_USER="brotherscan"
+
+# « update » remplace ce fichier pendant son exécution : on travaille sur une copie
+if [[ ${1:-} == update && -z ${BS_SELF_COPY:-} ]]; then
+  copy="$(mktemp)"; cp "$0" "$copy"
+  BS_SELF_COPY=1 BS_INSTALL_DIR="$INSTALL_DIR" exec bash "$copy" "$@"
+fi
+INSTALL_DIR="${BS_INSTALL_DIR:-$INSTALL_DIR}"
+[[ -n ${BS_SELF_COPY:-} ]] && rm -f "$0"
+
+if [[ -t 1 ]]; then B=$'\e[1m'; D=$'\e[2m'; G=$'\e[32m'; R=$'\e[31m'; N=$'\e[0m'; else B= D= G= R= N=; fi
+
+need_root() { [[ $EUID -eq 0 ]] || { echo "Utilisez : sudo brother-scan $*"; exit 1; }; }
+env_get() { grep -E "^$1=" "$ENV_FILE" | tail -1 | cut -d= -f2- | sed -e "s/^'//" -e "s/'$//"; }
+run_app() {
+  (cd "$INSTALL_DIR" && runuser -u "$APP_USER" -- env BS_ENV_FILE="$ENV_FILE" "$INSTALL_DIR/venv/bin/python" -m brotherscan.cli "$@")
+}
+health() { curl -fsS --max-time 5 "http://127.0.0.1:$(env_get BS_PORT)/healthz" >/dev/null 2>&1; }
+
+cmd_update() {
+  need_root update
+  local quiet=0; [[ ${1:-} == --quiet ]] && quiet=1
+  local branch before after
+  branch="$(git -C "$INSTALL_DIR" rev-parse --abbrev-ref HEAD)"
+  before="$(git -C "$INSTALL_DIR" rev-parse HEAD)"
+  git -C "$INSTALL_DIR" fetch -q origin "$branch"
+  after="$(git -C "$INSTALL_DIR" rev-parse "origin/$branch")"
+  if [[ $before == "$after" ]]; then
+    [[ $quiet == 1 ]] || echo "  ${G}✔${N} Déjà à jour ($(git -C "$INSTALL_DIR" rev-parse --short HEAD))."
+    return 0
+  fi
+  echo "  Mise à jour ${before:0:7} → ${after:0:7}"
+  git -C "$INSTALL_DIR" reset -q --hard "$after"
+  "$INSTALL_DIR/venv/bin/pip" install -q -r "$INSTALL_DIR/requirements.txt"
+  # Le script d'installation est rejoué sans questions : il applique les nouveautés (service, proxy…)
+  if ! BRANCH="$branch" INSTALL_DIR="$INSTALL_DIR" bash "$INSTALL_DIR/install.sh" </dev/null >/tmp/brother-scan-update.log 2>&1; then
+    echo "  ${R}✘${N} Échec, retour à la version précédente (détails : /tmp/brother-scan-update.log)."
+    git -C "$INSTALL_DIR" reset -q --hard "$before"
+    "$INSTALL_DIR/venv/bin/pip" install -q -r "$INSTALL_DIR/requirements.txt"
+    systemctl restart "$SERVICE"
+    return 1
+  fi
+  sleep 2
+  if health; then
+    echo "  ${G}✔${N} Mis à jour et redémarré."
+  else
+    echo "  ${R}✘${N} Le service ne répond plus, retour à la version précédente."
+    git -C "$INSTALL_DIR" reset -q --hard "$before"
+    "$INSTALL_DIR/venv/bin/pip" install -q -r "$INSTALL_DIR/requirements.txt"
+    systemctl restart "$SERVICE"
+    return 1
+  fi
+}
+
+cmd_pin() {
+  need_root pin
+  run_app set-pin </dev/tty
+  systemctl restart "$SERVICE"
+  echo "  Les sessions ouvertes ont été déconnectées."
+}
+
+cmd_config() {
+  need_root config
+  "${EDITOR:-nano}" "$ENV_FILE"
+  systemctl restart "$SERVICE"
+  run_app check-mail || true
+  echo "  ${D}Pour changer de domaine, relancez plutôt : sudo bash $INSTALL_DIR/install.sh${N}"
+}
+
+cmd_ssl() {
+  need_root ssl
+  local domain; domain="$(env_get BS_DOMAIN)"
+  if command -v nginx >/dev/null && [[ -f /etc/nginx/sites-available/$SERVICE.conf || -f /etc/nginx/conf.d/$SERVICE.conf ]]; then
+    certbot --nginx -d "$domain" --non-interactive --agree-tos -m "$(env_get BS_SCAN_ADDRESS)" --redirect --keep-until-expiring
+  elif [[ -f /etc/apache2/sites-available/$SERVICE.conf ]]; then
+    certbot --apache -d "$domain" --non-interactive --agree-tos -m "$(env_get BS_SCAN_ADDRESS)" --redirect --keep-until-expiring
+  else
+    echo "  Le certificat est géré par votre proxy (Caddy / autre)."
+  fi
+}
+
+cmd_status() {
+  local port; port="$(env_get BS_PORT 2>/dev/null || echo '?')"
+  echo "  ${B}Brother Scan${N} $(git -C "$INSTALL_DIR" rev-parse --short HEAD 2>/dev/null)"
+  echo "  Site      https://$(env_get BS_DOMAIN 2>/dev/null)"
+  echo "  Service   $(systemctl is-active "$SERVICE") (127.0.0.1:$port)"
+  echo "  Réponse   $(health && echo "${G}OK${N}" || echo "${R}aucune${N}")"
+  echo "  Mises à jour auto : $(systemctl is-enabled "$SERVICE-update.timer" 2>/dev/null)"
+}
+
+cmd_uninstall() {
+  need_root uninstall
+  read -r -p "  Supprimer Brother Scan, sa configuration et tous les documents ? [o/N] " a </dev/tty
+  [[ ${a,,} == o* ]] || exit 0
+  systemctl disable -q --now "$SERVICE" "$SERVICE-update.timer" 2>/dev/null || true
+  rm -f /etc/systemd/system/$SERVICE.service /etc/systemd/system/$SERVICE-update.{service,timer}
+  rm -f /etc/nginx/sites-enabled/$SERVICE.conf /etc/nginx/sites-available/$SERVICE.conf /etc/nginx/conf.d/$SERVICE.conf
+  [[ -f /etc/apache2/sites-available/$SERVICE.conf ]] && { a2dissite -q "$SERVICE" || true; rm -f /etc/apache2/sites-available/$SERVICE.conf; }
+  [[ -f /etc/caddy/Caddyfile ]] && sed -i "/# >>> brother-scan/,/# <<< brother-scan/d" /etc/caddy/Caddyfile
+  systemctl daemon-reload
+  systemctl reload nginx 2>/dev/null || systemctl reload apache2 2>/dev/null || systemctl reload caddy 2>/dev/null || true
+  rm -rf /var/lib/brother-scan /etc/brother-scan /usr/local/bin/brother-scan "$INSTALL_DIR"
+  userdel "$APP_USER" 2>/dev/null || true
+  echo "  Brother Scan a été désinstallé."
+}
+
+case "${1:-help}" in
+  update)    shift; cmd_update "$@" ;;
+  pin)       cmd_pin ;;
+  config)    cmd_config ;;
+  ssl)       cmd_ssl ;;
+  status)    cmd_status ;;
+  logs)      journalctl -u "$SERVICE" -n 100 -f ;;
+  restart)   need_root restart; systemctl restart "$SERVICE" && echo "  Redémarré." ;;
+  check)     need_root check; run_app check-mail ;;
+  uninstall) cmd_uninstall ;;
+  *)
+    cat <<EOF
+  ${B}brother-scan${N} <commande>
+
+    update      Mettre à jour (automatique chaque nuit)
+    pin         Changer le code PIN
+    config      Modifier la configuration e-mail
+    check       Tester la connexion à la boîte e-mail
+    ssl         (Re)demander le certificat SSL
+    status      État du service
+    logs        Journal en direct
+    restart     Redémarrer
+    uninstall   Tout désinstaller
+EOF
+    ;;
+esac
