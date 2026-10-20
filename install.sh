@@ -255,7 +255,13 @@ ok "en ligne sur 127.0.0.1:$PORT (invisible depuis l’extérieur)"
 # ----------------------------------------------------------------- domaine + SSL
 step "Domaine et certificat SSL ($DOMAIN)"
 SERVER_IP="$(curl -4 -fsS --max-time 5 https://api.ipify.org 2>/dev/null || true)"
-DNS_IP="$(getent ahostsv4 "$DOMAIN" 2>/dev/null | awk 'NR==1{print $1}')"
+# Résolution publique (DNS-over-HTTPS) : /etc/hosts associe souvent le nom du VPS à 127.0.1.1
+public_dns() {
+  curl -fsS --max-time 6 -H 'accept: application/dns-json' "https://cloudflare-dns.com/dns-query?name=$1&type=A" 2>/dev/null \
+    | grep -oE '"data":"[0-9.]+"' | head -1 | cut -d'"' -f4 || true
+}
+DNS_IP="$(public_dns "$DOMAIN")"
+[[ -n $DNS_IP ]] || DNS_IP="$(getent ahostsv4 "$DOMAIN" 2>/dev/null | awk '$1 !~ /^127\./ {print $1; exit}' || true)"
 if [[ -z $DNS_IP ]]; then
   warn "$DOMAIN ne pointe nulle part. Créez un enregistrement DNS A vers ${SERVER_IP:-l’IP du VPS} puis relancez le script."
 elif [[ -n $SERVER_IP && $DNS_IP != "$SERVER_IP" ]]; then
@@ -265,7 +271,7 @@ else
 fi
 LE_EMAIL="$(env_get BS_SCAN_ADDRESS)"
 
-listener() { ss -Hltnp "( sport = :$1 )" 2>/dev/null | grep -oE 'users:\(\("[^"]+"' | head -1 | cut -d'"' -f2; }
+listener() { ss -Hltnp "( sport = :$1 )" 2>/dev/null | grep -oE 'users:\(\("[^"]+"' | head -1 | cut -d'"' -f2 || true; }
 WEB="$(listener 80)"; [[ -z $WEB ]] && WEB="$(listener 443)"
 
 if [[ -z $WEB ]]; then
@@ -306,7 +312,8 @@ EOF
     else
       sed -i -E "s#proxy_pass http://127\.0\.0\.1:[0-9]+;#proxy_pass http://127.0.0.1:$PORT;#" "$VHOST"
     fi
-    nginx -t -q && systemctl reload nginx
+    nginx -t -q || die "Configuration nginx invalide (nginx -t pour le détail)."
+    systemctl enable -q nginx; systemctl reload-or-restart nginx
     ok "nginx configuré"
     if certbot --nginx -d "$DOMAIN" --non-interactive --agree-tos -m "$LE_EMAIL" --redirect --keep-until-expiring -q; then
       ok "certificat SSL actif (renouvellement automatique)"
@@ -326,7 +333,7 @@ EOF
     RequestHeader set X-Forwarded-Proto "expr=%{REQUEST_SCHEME}"
 </VirtualHost>
 EOF
-    a2ensite -q $SERVICE >/dev/null; systemctl reload apache2
+    a2ensite -q $SERVICE >/dev/null; systemctl reload-or-restart apache2
     certbot --apache -d "$DOMAIN" --non-interactive --agree-tos -m "$LE_EMAIL" --redirect --keep-until-expiring -q \
       && ok "Apache + SSL configurés" || warn "Certificat non obtenu. Relancez : sudo brother-scan ssl"
     ;;
