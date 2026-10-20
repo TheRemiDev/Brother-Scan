@@ -30,8 +30,31 @@
   color-scheme: light;
 }
 
+/* Thème sombre : par défaut (data-theme="dark"), ou selon le système en mode "auto" */
+:root[data-theme="dark"] {
+  --bg: #121211;
+  --surface: #1a1918;
+  --surface-2: #222120;
+  --ink: #f1eee8;
+  --ink-2: #c9c4ba;
+  --muted: #8f8a80;
+  --line: #2a2826;
+  --line-strong: #383532;
+  --accent: #f1eee8;
+  --accent-ink: #121211;
+  --gold: #c4a76f;
+  --danger: #e0806b;
+  --ok: #86b596;
+  --shadow-sm: none;
+  --shadow: 0 1px 0 rgba(255, 255, 255, .02), 0 10px 30px -16px rgba(0, 0, 0, .7);
+  --shadow-lg: 0 24px 70px -20px rgba(0, 0, 0, .8);
+  --paper-shadow: 0 8px 22px -10px rgba(0, 0, 0, .8);
+  --scrim: rgba(0, 0, 0, .6);
+  color-scheme: dark;
+}
+
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root[data-theme="auto"] {
     --bg: #121211;
     --surface: #1a1918;
     --surface-2: #222120;
@@ -559,6 +582,21 @@ h1, h2, h3 { font-family: var(--serif); font-weight: 400; margin: 0; letter-spac
 .chip.on { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
 .chip.on small { color: color-mix(in srgb, var(--accent-ink) 65%, transparent); }
 .chip.on .avatar { background: var(--accent-ink); color: var(--accent); }
+
+.segmented {
+  display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px;
+  padding: 4px; border-radius: 999px;
+  background: var(--surface-2); border: 1px solid var(--line);
+}
+.segmented button {
+  display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+  min-height: 42px; border: 0; border-radius: 999px;
+  background: transparent; color: var(--ink-2);
+  font-size: 14px; font-weight: 550;
+  transition: background-color .25s var(--ease), color .2s, box-shadow .25s;
+}
+.segmented button svg { width: 16px; height: 16px; }
+.segmented button[aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); }
 
 .check { display: flex; align-items: center; gap: 10px; font-size: 14px; color: var(--ink-2); cursor: pointer; }
 .check input { width: 20px; height: 20px; accent-color: var(--accent); }
