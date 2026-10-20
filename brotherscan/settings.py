@@ -74,6 +74,16 @@ class Settings:
             self._data["pin_hash"] = hash_pin(pin)
             self._save()
 
+    # --- Données libres (Google Drive...) -----------------------------------
+    def get(self, key: str, default=None):
+        value = self._data.get(key, default)
+        return json.loads(json.dumps(value))  # copie : rien n'est modifié par inadvertance
+
+    def put(self, key: str, value) -> None:
+        with self._lock:
+            self._data[key] = value
+            self._save()
+
     # --- Contacts --------------------------------------------------------
     @property
     def contacts(self) -> list[dict]:

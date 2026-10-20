@@ -25,6 +25,12 @@
     moon: '<path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5Z"/>',
     sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>',
     auto: '<rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/>',
+    drive: '<path d="M8.5 3h7l6 10.5-3.5 6h-12L2.5 13.5 8.5 3Z"/><path d="m8.5 3 6 10.5h7"/><path d="M15.5 3 9.5 13.5 6 19.5"/><path d="M2.5 13.5h12"/>',
+    folder: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z"/>',
+    folderPlus: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z"/><path d="M12 10.5v5M9.5 13h5"/>',
+    external: '<path d="M14 4h6v6"/><path d="M20 4 11 13"/><path d="M19 14v4a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h4"/>',
+    copy: '<rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 0 1 2-2h8"/>',
+    pencil: '<path d="M4 20h4L19 9a2.8 2.8 0 0 0-4-4L4 16v4Z"/><path d="m13.5 6.5 4 4"/>',
     mail: '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 7 9 6 9-6"/>',
   };
   const icon = (name, extra = "") =>
@@ -124,6 +130,7 @@
     scans: [],
     mail: null,
     canSend: true,
+    drive: [],
     merging: false,
     selection: [],
     contacts: null,
@@ -190,6 +197,7 @@
         await api("/api/login", { method: "POST", body: { pin: input.value } });
         clearInterval(countdown);
         await enterApp();
+        handleDriveReturn();
       } catch (err) {
         submit.disabled = false;
         submit.replaceChildren("Déverrouiller", iconEl("arrowRight"));
@@ -237,8 +245,9 @@
     state.scans = data.scans;
     state.mail = data.mail;
     state.canSend = data.can_send;
+    state.drive = data.drive || [];
     state.selection = state.selection.filter((id) => state.knownIds.has(id));
-    const signature = JSON.stringify([ids, data.mail.error, data.mail.enabled]);
+    const signature = JSON.stringify([ids, data.mail.error, data.mail.enabled, state.drive.map((d) => d.id)]);
     if (signature !== state.signature || !$app.querySelector(".shell")) {
       state.signature = signature;
       renderMain();
@@ -260,6 +269,11 @@
       h("div", { class: "paper" }, img),
       label ? h("span", { class: "pages-chip" }, pagesLabel(scan.pages)) : null,
     );
+  }
+
+  function driveButton(scan, cls = "btn btn-secondary btn-lg") {
+    if (!state.drive.length) return null;
+    return h("button", { class: cls, type: "button", onclick: () => openDriveSend(scan) }, iconEl("drive"), "Drive");
   }
 
   function downloadButton(scan, cls = "btn btn-primary") {
@@ -363,9 +377,10 @@
           h("span", {}, `${pagesLabel(scan.pages)} · ${sizeLabel(scan.size)}`),
           expiryEl(scan),
         ),
-        h("div", { class: "feature-actions" },
+        h("div", { class: `feature-actions${state.drive.length ? " with-drive" : ""}` },
           downloadButton(scan, "btn btn-primary btn-lg"),
           h("button", { class: "btn btn-secondary btn-lg", type: "button", onclick: () => openSend(scan) }, iconEl("send"), "Envoyer"),
+          driveButton(scan),
           h("button", { class: "btn btn-ghost btn-lg", type: "button", onclick: () => openViewer(scan) }, iconEl("eye"), "Voir"),
         ),
       ),
@@ -507,7 +522,7 @@
       h("button", { class: "icon-btn", type: "button", "aria-label": "Fermer", html: icon("close"), onclick: close }),
     );
     const bodyEl = h("div", { class: "sheet-body" }, body);
-    const sheet = h("div", { class: `sheet${wide ? " wide" : ""}` }, h("div", { class: "sheet-grip" }), head, bodyEl, foot ? h("div", { class: "sheet-foot" }, foot) : null);
+    const sheet = h("div", { class: `sheet${wide ? " wide" : ""}` }, h("div", { class: "sheet-grip" }), head, bodyEl, foot ? h("div", { class: "sheet-foot" }, [].concat(foot).filter(Boolean)) : null);
     root.append(h("div", { class: "scrim", onclick: close }), sheet);
     document.body.append(root);
     document.body.classList.add("locked-scroll");
@@ -515,7 +530,7 @@
       let f = sheet.querySelector(".sheet-foot");
       if (!nodes) { if (f) f.remove(); return; }
       if (!f) { f = h("div", { class: "sheet-foot" }); sheet.append(f); }
-      f.replaceChildren(...[].concat(nodes));
+      f.replaceChildren(...[].concat(nodes).filter(Boolean));
     } };
     sheets.push(api);
     return api;
@@ -541,6 +556,7 @@
       foot: [
         downloadButton(scan, "btn btn-primary btn-lg"),
         h("button", { class: "btn btn-secondary btn-lg", type: "button", onclick: () => openSend(scan) }, iconEl("send"), "Envoyer"),
+        driveButton(scan),
         removeBtn,
       ],
     });
@@ -675,6 +691,8 @@
 
   // ---------------------------------------------------------------- réglages
   async function openSettings() {
+    const driveSection = h("div", { "data-drive-section": "" });
+    renderDriveSection(driveSection);
     const contactList = h("div", { class: "list" });
     const renderContacts = async () => {
       let contacts = [];
@@ -733,6 +751,11 @@
           contactList, contactForm),
         h("div", { class: "divider" }),
         h("section", { class: "settings-section" },
+          h("h4", {}, "Google Drive"),
+          h("p", {}, "Des dossiers Drive prêts à l’emploi : un document s’y range en deux gestes."),
+          driveSection),
+        h("div", { class: "divider" }),
+        h("section", { class: "settings-section" },
           h("h4", {}, "Apparence"),
           h("p", {}, "Le mode sombre est utilisé par défaut. Ce choix est mémorisé sur cet appareil."),
           themePicker()),
@@ -762,6 +785,229 @@
     return group;
   }
 
+  // ================================================================ Google Drive
+  const cleanName = (scan) => scan.download_name.replace(/\.pdf$/i, "");
+
+  async function openDriveSend(scan) {
+    const nameInput = h("input", { class: "input", value: cleanName(scan), "aria-label": "Nom du fichier", autocomplete: "off", spellcheck: "false" });
+    const list = h("div", { class: "dest-list" });
+    const sheet = openSheet({
+      title: "Enregistrer dans Drive",
+      sub: `${docTitle(scan)} · ${dayLabel(scan.created_at)}, ${timeLabel(scan.created_at)} · ${pagesLabel(scan.pages)}`,
+      body: h("div", {},
+        h("div", { class: "field" }, h("span", { class: "label" }, "Choisissez le dossier"), list),
+        h("div", { class: "field" }, h("label", {}, "Nom du fichier ", h("span", { class: "hint" }, "(facultatif)")),
+          h("div", { class: "input-suffix" }, nameInput, h("span", {}, ".pdf"))),
+        h("p", { class: "hint", style: "margin:0" }, "La copie dans Google Drive est conservée : elle n’est pas supprimée après 24 h."),
+      ),
+    });
+    let busy = false;
+    state.drive.forEach((dest) => {
+      const btn = h("button", { class: "dest-card", type: "button" },
+        h("span", { class: "dest-icon", html: icon("drive") }),
+        h("span", { class: "dest-text" }, h("span", { class: "t" }, dest.label), h("span", { class: "s" }, `${dest.folder_path} · ${dest.email}`)),
+        h("span", { class: "dest-go", html: icon("arrowRight") }),
+      );
+      btn.addEventListener("click", async () => {
+        if (busy) return;
+        busy = true;
+        btn.classList.add("busy");
+        btn.lastChild.replaceChildren(h("span", { class: "spinner" }));
+        try {
+          const res = await api(`/api/scans/${scan.id}/drive`, { method: "POST", body: { destination_id: dest.id, filename: nameInput.value } });
+          sheet.body.replaceChildren(h("div", { class: "done" },
+            h("div", { class: "done-mark", html: icon("check", 'stroke-width="2.2"') }),
+            h("h3", {}, "Enregistré"),
+            h("p", {}, `Le document est dans « ${dest.folder_path} ».`),
+          ));
+          sheet.setFoot([
+            h("a", { class: "btn btn-secondary btn-lg", href: res.link, target: "_blank", rel: "noopener noreferrer" }, iconEl("external"), "Ouvrir dans Drive"),
+            h("button", { class: "btn btn-primary btn-lg", type: "button", onclick: () => sheet.close() }, "Terminé"),
+          ]);
+        } catch (err) {
+          busy = false;
+          btn.classList.remove("busy");
+          btn.lastChild.innerHTML = icon("arrowRight");
+          toast(err.message, "error");
+        }
+      });
+      list.append(btn);
+    });
+  }
+
+  async function renderDriveSection(container) {
+    let info;
+    try { info = await api("/api/drive"); } catch (err) { container.replaceChildren(h("div", { class: "form-error" }, err.message)); return; }
+    container.replaceChildren();
+    if (!info.configured) { container.append(driveClientForm(info, container)); return; }
+
+    const list = h("div", { class: "list" });
+    if (!info.destinations.length) list.append(h("div", { class: "list-empty" }, "Aucun dossier Drive pour le moment."));
+    info.destinations.forEach((d) => list.append(h("div", { class: "list-row" },
+      h("span", { class: "dest-icon small", html: icon("drive") }),
+      h("div", { class: "grow" }, h("div", { class: "t" }, d.label), h("div", { class: "s" }, `${d.folder_path} · ${d.email}`)),
+      h("button", { class: "icon-btn", type: "button", "aria-label": `Modifier ${d.label}`, title: "Changer de dossier", html: icon("pencil"),
+        onclick: () => openFolderPicker({ account: { id: d.account_id, email: d.email }, destination: d, container }) }),
+      h("button", { class: "icon-btn", type: "button", "aria-label": `Supprimer ${d.label}`, title: "Retirer", html: icon("trash"), onclick: async () => {
+        try { await api(`/api/drive/destinations/${d.id}`, { method: "DELETE" }); await afterDriveChange(container); toast("Dossier retiré"); }
+        catch (err) { toast(err.message, "error"); }
+      } }),
+    )));
+    container.append(list,
+      h("button", { class: "btn btn-secondary btn-block", type: "button", style: "margin-top:14px", onclick: () => openAddDestination(info, container) },
+        iconEl("plus"), "Ajouter un dossier Drive"),
+      h("button", { class: "btn btn-ghost btn-sm", type: "button", style: "margin-top:6px", onclick: () => container.replaceChildren(driveClientForm(info, container)) },
+        "Identifiants de l’application Google"),
+    );
+  }
+
+  async function afterDriveChange(container) {
+    container = container && container.isConnected ? container : document.querySelector("[data-drive-section]");
+    if (container) await renderDriveSection(container);
+    state.signature = "";
+    await refresh().catch(() => {});
+  }
+
+  function driveClientForm(info, container) {
+    const id = h("input", { class: "input", placeholder: "ID client (…apps.googleusercontent.com)", value: info.client_id || "", "aria-label": "ID client", autocomplete: "off", spellcheck: "false", autocapitalize: "off" });
+    const secret = h("input", { class: "input", type: "password", placeholder: info.configured ? "Code secret (inchangé si vide)" : "Code secret du client", "aria-label": "Code secret", autocomplete: "off" });
+    const error = h("div", { class: "form-error" });
+    const uri = h("code", { class: "code" }, info.redirect_uri);
+    const copy = h("button", { class: "icon-btn", type: "button", "aria-label": "Copier", title: "Copier", html: icon("copy"), onclick: async () => {
+      try { await navigator.clipboard.writeText(info.redirect_uri); toast("Adresse copiée"); } catch (_) { toast("Copie impossible : sélectionnez le texte", "error"); }
+    } });
+    const form = h("form", { style: "display:grid;gap:10px" },
+      h("ol", { class: "steps-list" },
+        h("li", {}, "Sur ", h("a", { href: "https://console.cloud.google.com/apis/library/drive.googleapis.com", target: "_blank", rel: "noopener" }, "console.cloud.google.com"), ", créez un projet et activez « Google Drive API »."),
+        h("li", {}, "Écran de consentement OAuth : type « Externe », puis cliquez sur « Publier l’application » (sinon l’accès expire au bout de 7 jours)."),
+        h("li", {}, "Identifiants › Créer › ID client OAuth › « Application Web », avec cette URI de redirection autorisée :"),
+      ),
+      h("div", { class: "code-row" }, uri, copy),
+      h("p", { class: "hint", style: "margin:0 0 6px" }, "Copiez ensuite l’ID client et le code secret ci-dessous. À la connexion, Google affichera « application non validée » : cliquez sur « Paramètres avancés » puis « Accéder à… », c’est normal pour une application personnelle."),
+      id, secret, error,
+      h("button", { class: "btn btn-secondary btn-block", type: "submit" }, "Enregistrer les identifiants"),
+      info.configured ? h("button", { class: "btn btn-ghost btn-sm", type: "button", onclick: () => renderDriveSection(container) }, "Annuler") : null,
+    );
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      error.textContent = "";
+      if (info.configured && !secret.value) { renderDriveSection(container); return; }
+      try {
+        await api("/api/drive/client", { method: "POST", body: { client_id: id.value, client_secret: secret.value } });
+        toast("Identifiants enregistrés");
+        renderDriveSection(container);
+      } catch (err) { error.textContent = err.message; }
+    });
+    return form;
+  }
+
+  const connectGoogle = () => { window.location.href = "/api/drive/connect"; };
+
+  function openAddDestination(info, container) {
+    if (!info.accounts.length) { connectGoogle(); return; }
+    const sheet = openSheet({
+      title: "Ajouter un dossier",
+      sub: "Avec quel compte Google ?",
+      body: h("div", { class: "dest-list" },
+        info.accounts.map((a) => h("button", { class: "dest-card", type: "button", onclick: () => { sheet.close(); openFolderPicker({ account: a, container }); } },
+          h("span", { class: "dest-icon", html: icon("drive") }),
+          h("span", { class: "dest-text" }, h("span", { class: "t" }, a.email), h("span", { class: "s" }, "Compte déjà connecté")),
+          h("span", { class: "dest-go", html: icon("arrowRight") }))),
+        h("button", { class: "btn btn-secondary btn-block", type: "button", style: "margin-top:6px", onclick: connectGoogle }, iconEl("plus"), "Connecter un autre compte Google"),
+      ),
+    });
+  }
+
+  function openFolderPicker({ account, destination = null, container = null }) {
+    // Chemin : [{id, name}], du « Mon Drive » au dossier courant
+    let path = [{ id: "root", name: "Mon Drive" }];
+    const label = h("input", { class: "input", placeholder: "Nom du raccourci (ex. Factures)", value: destination ? destination.label : "", "aria-label": "Nom du raccourci", autocomplete: "off" });
+    const crumbs = h("div", { class: "crumbs" });
+    const list = h("div", { class: "list folder-list" });
+    const newName = h("input", { class: "input", placeholder: "Nouveau dossier ici", "aria-label": "Nom du nouveau dossier", autocomplete: "off" });
+    const newForm = h("form", { class: "input-row", style: "margin-top:10px" }, newName,
+      h("button", { class: "btn btn-secondary", type: "submit", "aria-label": "Créer le dossier" }, iconEl("folderPlus"), "Créer"));
+    const choose = h("button", { class: "btn btn-primary btn-lg", type: "button" });
+    const current = () => path[path.length - 1];
+    const pathText = () => path.map((p) => p.name).join(" / ");
+
+    async function load() {
+      crumbs.replaceChildren(...path.flatMap((p, i) => [
+        i ? h("span", { class: "sep", html: icon("right") }) : null,
+        h("button", { type: "button", class: i === path.length - 1 ? "on" : "", onclick: () => { path = path.slice(0, i + 1); load(); } }, p.name),
+      ]).filter(Boolean));
+      choose.replaceChildren(iconEl("check"), `Choisir « ${current().name} »`);
+      list.replaceChildren(h("div", { class: "list-empty" }, h("span", { class: "spinner", style: "display:inline-block" })));
+      try {
+        const { folders } = await api(`/api/drive/accounts/${account.id}/folders?parent=${encodeURIComponent(current().id)}`);
+        list.replaceChildren();
+        if (!folders.length) list.append(h("div", { class: "list-empty" }, "Aucun sous-dossier."));
+        folders.forEach((f) => list.append(h("button", { class: "list-row folder-row", type: "button", onclick: () => { path.push(f); load(); } },
+          h("span", { class: "folder-ico", html: icon("folder") }),
+          h("span", { class: "grow t" }, f.name),
+          h("span", { class: "folder-ico", html: icon("right") }))));
+      } catch (err) {
+        list.replaceChildren(h("div", { class: "list-empty", style: "color:var(--danger)" }, err.message));
+      }
+    }
+
+    newForm.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      if (!newName.value.trim()) { newName.focus(); return; }
+      try {
+        const folder = await api(`/api/drive/accounts/${account.id}/folders`, { method: "POST", body: { parent: current().id, name: newName.value } });
+        newName.value = "";
+        path.push(folder);
+        toast("Dossier créé");
+        load();
+      } catch (err) { toast(err.message, "error"); }
+    });
+
+    const sheet = openSheet({
+      title: destination ? "Changer de dossier" : "Choisir le dossier",
+      sub: account.email,
+      body: h("div", {},
+        h("div", { class: "field" }, h("label", {}, "Nom affiché ", h("span", { class: "hint" }, "(facultatif)")), label),
+        h("div", { class: "field", style: "margin-bottom:0" }, h("span", { class: "label" }, "Dossier de destination"), crumbs, list, newForm),
+      ),
+      foot: [choose],
+    });
+    choose.addEventListener("click", async () => {
+      choose.disabled = true;
+      try {
+        await api("/api/drive/destinations", { method: "POST", body: {
+          id: destination ? destination.id : null, account_id: account.id,
+          label: label.value || current().name, folder_id: current().id, folder_path: pathText(),
+        } });
+        sheet.close();
+        toast("Dossier Drive enregistré");
+        await afterDriveChange(container);
+      } catch (err) {
+        choose.disabled = false;
+        toast(err.message, "error");
+      }
+    });
+    load();
+  }
+
+  // Retour de la connexion Google (?drive_account=… ou ?drive_error=…)
+  async function handleDriveReturn() {
+    const params = new URLSearchParams(window.location.search);
+    const accountId = params.get("drive_account");
+    const error = params.get("drive_error");
+    if (!accountId && !error) return;
+    history.replaceState(null, "", "/");
+    if (error) { openSettings(); toast(error, "error"); return; }
+    try {
+      const info = await api("/api/drive");
+      const account = info.accounts.find((a) => a.id === accountId);
+      if (!account) return;
+      toast("Compte Google connecté");
+      openSettings();
+      openFolderPicker({ account, container: null });
+    } catch (err) { toast(err.message, "error"); }
+  }
+
   async function logout() {
     try { await api("/api/logout", { method: "POST" }); } catch (_) { /* ignoré */ }
     state.contacts = null;
@@ -778,7 +1024,7 @@
   (async () => {
     try {
       state.info = await api("/api/session");
-      if (state.info.authenticated) await enterApp();
+      if (state.info.authenticated) { await enterApp(); handleDriveReturn(); }
       else renderLock();
     } catch (_) {
       renderLock("Serveur injoignable. Réessayez dans un instant.");
