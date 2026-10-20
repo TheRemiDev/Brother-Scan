@@ -75,8 +75,9 @@ Tout se configure dans le site : **⚙ Réglages › Google Drive**. Une seule p
 
 1. Sur [console.cloud.google.com](https://console.cloud.google.com/apis/library/drive.googleapis.com), créez un projet
    et activez **Google Drive API**.
-2. **Écran de consentement OAuth** : type « Externe », puis **Publier l'application**
-   (en mode « Test », Google coupe l'accès au bout de 7 jours).
+2. **Google Auth Platform › Audience** : type d'utilisateur « Externe », puis **Publier l'application**
+   (l'état doit passer à « En production »). En mode « Test », Google refuse la connexion
+   (« application en cours de test ») et couperait de toute façon l'accès au bout de 7 jours.
 3. **Identifiants › Créer des identifiants › ID client OAuth › Application Web**, avec comme URI de redirection
    autorisée `https://scan.remividon.fr/api/drive/callback` (affichée et copiable dans les réglages).
 4. Collez l'ID client et le code secret dans les réglages, puis **Ajouter un dossier Drive** : connectez le compte,

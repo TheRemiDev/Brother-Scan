@@ -879,7 +879,7 @@
     const form = h("form", { style: "display:grid;gap:10px" },
       h("ol", { class: "steps-list" },
         h("li", {}, "Sur ", h("a", { href: "https://console.cloud.google.com/apis/library/drive.googleapis.com", target: "_blank", rel: "noopener" }, "console.cloud.google.com"), ", créez un projet et activez « Google Drive API »."),
-        h("li", {}, "Écran de consentement OAuth : type « Externe », puis cliquez sur « Publier l’application » (sinon l’accès expire au bout de 7 jours)."),
+        h("li", {}, "Menu « Google Auth Platform › Audience » : type d’utilisateur « Externe », puis bouton « Publier l’application » (l’état doit passer à « En production ») ; en mode « Test », Google refuse la connexion."),
         h("li", {}, "Identifiants › Créer › ID client OAuth › « Application Web », avec cette URI de redirection autorisée :"),
       ),
       h("div", { class: "code-row" }, uri, copy),
