@@ -18,7 +18,7 @@ INSTALL_DIR="${BS_INSTALL_DIR:-$INSTALL_DIR}"
 if [[ -t 1 ]]; then B=$'\e[1m'; D=$'\e[2m'; G=$'\e[32m'; R=$'\e[31m'; N=$'\e[0m'; else B= D= G= R= N=; fi
 
 need_root() { [[ $EUID -eq 0 ]] || { echo "Utilisez : sudo brother-scan $*"; exit 1; }; }
-env_get() { grep -E "^$1=" "$ENV_FILE" | tail -1 | cut -d= -f2- | sed -e "s/^'//" -e "s/'$//"; }
+env_get() { grep -E "^$1=" "$ENV_FILE" 2>/dev/null | tail -1 | cut -d= -f2- | sed -e "s/^'//" -e "s/'$//" || true; }
 run_app() {
   (cd "$INSTALL_DIR" && runuser -u "$APP_USER" -- env BS_ENV_FILE="$ENV_FILE" "$INSTALL_DIR/venv/bin/python" -m brotherscan.cli "$@")
 }
