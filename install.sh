@@ -112,7 +112,11 @@ if [[ $RECONF == 1 ]]; then
   ask SMTP_HOST "Serveur SMTP" "$(h=$(env_get BS_SMTP_HOST); echo "${h:-${IMAP_HOST/imap/smtp}}")"
   ask SMTP_PORT "Port SMTP (465 = SSL, 587 = STARTTLS)" "$(p=$(env_get BS_SMTP_PORT); echo "${p:-465}")"
   SMTP_SECURITY=ssl; [[ $SMTP_PORT == 587 || $SMTP_PORT == 25 ]] && SMTP_SECURITY=starttls
-  ask SMTP_FROM "Nom affiché à l’envoi" "$(f=$(env_get BS_SMTP_FROM); echo "${f:-Scan <$IMAP_USER>}")"
+  # Seul le nom est demandé : l'adresse d'expéditeur est toujours celle de la boîte
+  FROM_NAME_DEF="$(env_get BS_SMTP_FROM | sed -E 's/[[:space:]]*<[^>]*>$//')"
+  [[ $FROM_NAME_DEF == *@* ]] && FROM_NAME_DEF=""
+  ask FROM_NAME "Nom de l’expéditeur (ex. Scanner – Rémi VIDON)" "${FROM_NAME_DEF:-Scan}"
+  SMTP_FROM="$FROM_NAME <$IMAP_USER>"
 
   ask ALLOWED "Expéditeurs autorisés (adresse de l’imprimante, vide = tous)" "$(env_get BS_ALLOWED_SENDERS)"
 fi

@@ -13,6 +13,7 @@ import smtplib
 import ssl
 import threading
 import time
+from email.headerregistry import Address
 from email.message import EmailMessage
 from pathlib import Path
 
@@ -234,15 +235,26 @@ class MailWorker:
             log.info("%d ancien(s) e-mail(s) supprimé(s) dans %s", len(old), folder)
 
 
+def sender_identity(cfg: Config) -> tuple[str, str]:
+    """(nom affiché, adresse) : BS_SMTP_FROM peut être « Nom <adresse> », une adresse seule ou un nom seul."""
+    raw = cfg.smtp_from.strip()
+    if "<" in raw or "@" in raw:
+        name, address = email.utils.parseaddr(raw)
+        if "@" in address:
+            return name, address
+    # Un simple nom : l'adresse est celle du compte d'envoi
+    return raw.strip('"'), cfg.smtp_user
+
+
 def send_pdf(cfg: Config, recipients: list[str], subject: str, body: str, filename: str, data: bytes) -> None:
     if not cfg.smtp_enabled:
         raise RuntimeError("L'envoi d'e-mails n'est pas configuré.")
+    name, from_address = sender_identity(cfg)
     msg = EmailMessage()
-    msg["From"] = cfg.smtp_from
+    msg["From"] = Address(display_name=name, addr_spec=from_address) if name else from_address
     msg["To"] = ", ".join(recipients)
     msg["Subject"] = subject
     msg["Date"] = email.utils.formatdate(localtime=True)
-    from_address = email.utils.parseaddr(cfg.smtp_from)[1] or cfg.smtp_user
     msg["Message-ID"] = email.utils.make_msgid(domain=from_address.split("@")[-1] or None)
     msg.set_content(body)
     msg.add_attachment(data, maintype="application", subtype="pdf", filename=filename)
@@ -257,12 +269,29 @@ def send_pdf(cfg: Config, recipients: list[str], subject: str, body: str, filena
     try:
         if cfg.smtp_user and cfg.smtp_password:
             server.login(cfg.smtp_user, cfg.smtp_password)
-        server.send_message(msg)
+        # Expéditeur d'enveloppe explicite : toujours une vraie adresse, jamais le nom affiché
+        server.send_message(msg, from_addr=from_address, to_addrs=recipients)
     finally:
         try:
             server.quit()
         except Exception:
             pass
+
+
+def describe_smtp_error(exc: Exception) -> str:
+    """Explication courte et lisible d'un échec d'envoi."""
+    if isinstance(exc, smtplib.SMTPAuthenticationError):
+        return "identifiants SMTP refusés par le serveur."
+    if isinstance(exc, smtplib.SMTPSenderRefused):
+        return f"adresse d'expéditeur refusée ({exc.sender})."
+    if isinstance(exc, smtplib.SMTPRecipientsRefused):
+        return "destinataire refusé : " + ", ".join(exc.recipients)
+    if isinstance(exc, smtplib.SMTPResponseException):
+        detail = exc.smtp_error.decode("utf-8", "replace") if isinstance(exc.smtp_error, bytes) else str(exc.smtp_error)
+        return f"le serveur a répondu {exc.smtp_code} {detail[:160]}"
+    if isinstance(exc, (OSError, smtplib.SMTPException)):
+        return f"serveur e-mail injoignable ou en erreur ({str(exc)[:160] or exc.__class__.__name__})."
+    return "erreur inattendue, voir « brother-scan logs »."
 
 
 def test_connections(cfg: Config) -> list[tuple[str, bool, str]]:
