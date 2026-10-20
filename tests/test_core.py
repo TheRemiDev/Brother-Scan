@@ -1,6 +1,8 @@
 """Tests de base : python -m pytest tests (ou python tests/test_core.py)."""
 
 import email.utils
+import json
+import urllib.parse
 import imaplib
 import io
 import os
@@ -11,6 +13,7 @@ from email.message import EmailMessage
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from PIL import Image  # noqa: E402
 
@@ -150,6 +153,49 @@ def test_sender_identity():
         for raw, expected in cases.items():
             c = cfg.__class__(**{**cfg.__dict__, "smtp_from": raw, "smtp_user": "scan@remividon.fr"})
             assert mailer.sender_identity(c) == expected, raw
+
+
+def test_google_drive():
+    import fake_google
+    from brotherscan.drive import Drive, DriveError
+
+    google = fake_google.install()
+    with tempfile.TemporaryDirectory() as tmp:
+        settings = Settings(Path(tmp) / "s.json")
+        d = Drive(settings, "https://scan.remividon.fr")
+        assert d.redirect_uri == "https://scan.remividon.fr/api/drive/callback"
+        try:
+            d.set_client("mauvais", "x")
+            raise AssertionError("ID client invalide accepté")
+        except DriveError:
+            pass
+        d.set_client("123.apps.googleusercontent.com", "secret")
+        url = d.auth_url()
+        state = urllib.parse.parse_qs(urllib.parse.urlparse(url).query)["state"][0]
+        account = d.complete(state, "code")
+        try:
+            d.complete(state, "code")
+            raise AssertionError("state réutilisé")
+        except DriveError:
+            pass
+        assert [f["name"] for f in d.list_folders(account)] == ["Factures", "Impôts"]
+        sub = d.create_folder(account, "f1", "Banque")
+        dest = d.save_destination(destination_id=None, account_id=account, label="", folder_id=sub["id"],
+                                  folder_path="Mon Drive / Factures / Banque")
+        assert dest["label"] == "Banque"
+        res = d.upload(dest["id"], "Scan.pdf", b"%PDF-1.4 x" * 100)
+        assert res["link"].endswith("/view") and google.uploads == [("Scan.pdf", [sub["id"]], 1000)]
+        assert "rt1" not in json.dumps(d.public_state()), "jeton jamais exposé à l'interface"
+        # Accès révoqué chez Google : message clair
+        d._tokens.clear()
+        google.refresh_ok = False
+        try:
+            d.upload(dest["id"], "Scan.pdf", b"x")
+            raise AssertionError("aurait dû échouer")
+        except DriveError as exc:
+            assert "reconnectez" in str(exc)
+        d.remove_destination(dest["id"])
+        assert google.revoked == [["rt1"]] and d.public_state()["accounts"] == []
 
 
 def test_pin_and_sessions():

@@ -2,21 +2,24 @@
 
 from __future__ import annotations
 
+import html
 import logging
 import threading
 import time
+import urllib.parse
 from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 
 from . import __version__, auth, pdftools
 from .config import load_config
+from .drive import Drive, DriveError
 from .mailer import MailWorker, describe_smtp_error, send_pdf
 from .settings import Settings, valid_email
 from .store import Scan, Store
@@ -37,6 +40,7 @@ cfg = load_config()
 store = Store(cfg.scans_dir, cfg.cache_dir)
 settings = Settings(cfg.data_dir / "settings.json")
 mail = MailWorker(cfg, store)
+drive = Drive(settings, cfg.public_url)
 throttle = auth.Throttle()
 _stop = threading.Event()
 
@@ -209,6 +213,8 @@ def list_scans():
             "error": bool(mail.last_error),
         },
         "can_send": cfg.smtp_enabled,
+        "drive": [{"id": d["id"], "label": d["label"], "folder_path": d["folder_path"], "email": d["email"]}
+                  for d in drive.public_state()["destinations"]],
     }
 
 
@@ -315,6 +321,110 @@ def add_contact(body: ContactBody):
 def remove_contact(contact_id: str):
     settings.remove_contact(contact_id)
     return {"ok": True}
+
+
+# --- Google Drive -------------------------------------------------------------------
+def _drive_call(fn, *args, **kwargs):
+    try:
+        return fn(*args, **kwargs)
+    except DriveError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@app.get("/api/drive", dependencies=[Depends(require_session)])
+def drive_state():
+    return drive.public_state()
+
+
+class DriveClientBody(BaseModel):
+    client_id: str = Field(max_length=300)
+    client_secret: str = Field(max_length=300)
+
+
+@app.post("/api/drive/client", dependencies=[Depends(require_session)])
+def drive_client(body: DriveClientBody):
+    _drive_call(drive.set_client, body.client_id, body.client_secret)
+    return drive.public_state()
+
+
+@app.get("/api/drive/connect", dependencies=[Depends(require_session)])
+def drive_connect():
+    return RedirectResponse(_drive_call(drive.auth_url), 303)
+
+
+def _back_to_app(query: dict) -> HTMLResponse:
+    # Retour de Google : le cookie SameSite=Strict n'accompagne pas une redirection venue d'un autre site,
+    # on repasse donc par une page de notre domaine avant de rouvrir l'application.
+    target = "/?" + urllib.parse.urlencode(query)
+    safe = html.escape(target, quote=True)
+    page = (f'<!doctype html><meta charset="utf-8"><meta http-equiv="refresh" content="0;url={safe}">'
+            f'<meta name="viewport" content="width=device-width"><title>Scan</title>'
+            f'<body style="background:#121211;color:#f1eee8;font:16px system-ui;display:grid;place-items:center;'
+            f'min-height:90vh"><a href="{safe}" style="color:inherit">Retour à Scan…</a></body>')
+    return HTMLResponse(page, headers={"Cache-Control": "no-store"})
+
+
+@app.get("/api/drive/callback")
+async def drive_callback(state: str = "", code: str = "", error: str = ""):
+    if error or not code:
+        return _back_to_app({"drive_error": "Connexion à Google annulée."})
+    try:
+        account_id = await run_in_threadpool(drive.complete, state, code)
+    except DriveError as exc:
+        return _back_to_app({"drive_error": str(exc)})
+    return _back_to_app({"drive_account": account_id})
+
+
+@app.get("/api/drive/accounts/{account_id}/folders", dependencies=[Depends(require_session)])
+async def drive_folders(account_id: str, parent: str = "root"):
+    folders = await run_in_threadpool(_drive_call, drive.list_folders, account_id, parent)
+    return {"folders": folders}
+
+
+class FolderBody(BaseModel):
+    parent: str = Field(default="root", max_length=200)
+    name: str = Field(max_length=200)
+
+
+@app.post("/api/drive/accounts/{account_id}/folders", dependencies=[Depends(require_session)])
+async def drive_create_folder(account_id: str, body: FolderBody):
+    return await run_in_threadpool(_drive_call, drive.create_folder, account_id, body.parent, body.name)
+
+
+class DestinationBody(BaseModel):
+    id: str | None = Field(default=None, max_length=40)
+    account_id: str = Field(max_length=40)
+    label: str = Field(default="", max_length=200)
+    folder_id: str = Field(default="root", max_length=200)
+    folder_path: str = Field(default="Mon Drive", max_length=1000)
+
+
+@app.post("/api/drive/destinations", dependencies=[Depends(require_session)])
+def drive_save_destination(body: DestinationBody):
+    _drive_call(drive.save_destination, destination_id=body.id, account_id=body.account_id, label=body.label,
+                folder_id=body.folder_id, folder_path=body.folder_path)
+    return drive.public_state()
+
+
+@app.delete("/api/drive/destinations/{destination_id}", dependencies=[Depends(require_session)])
+async def drive_remove_destination(destination_id: str):
+    await run_in_threadpool(drive.remove_destination, destination_id)
+    return drive.public_state()
+
+
+class DriveUploadBody(BaseModel):
+    destination_id: str = Field(max_length=40)
+    filename: str = Field(default="", max_length=200)
+
+
+@app.post("/api/scans/{scan_id}/drive", dependencies=[Depends(require_session)])
+async def drive_upload(scan_id: str, body: DriveUploadBody):
+    scan = get_scan(scan_id)
+    name = "".join(c for c in body.filename.strip() if c not in '\\/:*?"<>|\r\n').strip() or _download_name(scan)
+    if not name.lower().endswith(".pdf"):
+        name += ".pdf"
+    data = store.pdf_path(scan.id).read_bytes()
+    return await run_in_threadpool(_drive_call, drive.upload, body.destination_id, name, data)
 
 
 @app.get("/healthz")

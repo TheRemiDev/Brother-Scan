@@ -5,7 +5,8 @@ Interface web privée pour la **Brother DCP-L3560CDW** : l'imprimante envoie ses
 
 1. **Télécharger** les 10 derniers documents (heure, nombre de pages, aperçu de chaque page) ;
 2. **Fusionner** plusieurs numérisations en un seul PDF, dans l'ordre choisi ;
-3. **Réexpédier** un PDF par e-mail (adresse saisie ou contacts favoris en un geste).
+3. **Réexpédier** un PDF par e-mail (adresse saisie ou contacts favoris en un geste) ;
+4. **Ranger dans Google Drive** en deux clics, dans des dossiers choisis à l'avance (plusieurs comptes possibles).
 
 Chaque document est **supprimé définitivement au bout de 24 h**, sur le serveur _et_ dans la boîte mail
 (l'e-mail est même effacé dès que le PDF est récupéré ; les dossiers « Envoyés » et « Corbeille » sont purgés à 24 h).
@@ -67,10 +68,32 @@ Dans l'interface web de la Brother (`https://<ip-de-l-imprimante>` → **Réseau
 Conseil : à l'installation, indiquez l'adresse d'envoi de l'imprimante comme « expéditeur autorisé » ;
 les autres e-mails sont alors ignorés (et effacés au bout de 24 h).
 
+## Google Drive
+
+Tout se configure dans le site : **⚙ Réglages › Google Drive**. Une seule préparation est nécessaire chez Google
+(environ 5 minutes, une fois pour toutes) :
+
+1. Sur [console.cloud.google.com](https://console.cloud.google.com/apis/library/drive.googleapis.com), créez un projet
+   et activez **Google Drive API**.
+2. **Écran de consentement OAuth** : type « Externe », puis **Publier l'application**
+   (en mode « Test », Google coupe l'accès au bout de 7 jours).
+3. **Identifiants › Créer des identifiants › ID client OAuth › Application Web**, avec comme URI de redirection
+   autorisée `https://scan.remividon.fr/api/drive/callback` (affichée et copiable dans les réglages).
+4. Collez l'ID client et le code secret dans les réglages, puis **Ajouter un dossier Drive** : connectez le compte,
+   choisissez (ou créez) le dossier. Google affichera « application non validée » : *Paramètres avancés › Accéder à…*,
+   c'est normal pour une application personnelle.
+
+Ensuite, sur chaque document : **Drive › choisir le dossier** — c'est envoyé. Le nom du fichier est modifiable avant l'envoi.
+On peut ajouter autant de dossiers que voulu, sur un ou plusieurs comptes Google.
+
+> Les copies envoyées dans Google Drive sont **conservées** (elles ne sont pas soumises à la suppression des 24 h).
+
 ## Sécurité
 
 - Code PIN de longueur libre (chiffres, lettres, phrase…), stocké haché (scrypt) ; blocage progressif après 5 erreurs.
 - Session de 12 h en cookie signé `HttpOnly` / `Secure` / `SameSite=Strict` ; changer le PIN déconnecte toutes les sessions.
+- Google Drive : seuls les jetons de connexion sont stockés (jamais renvoyés au navigateur) ; retirer le dernier
+  dossier d'un compte révoque aussi l'accès chez Google.
 - Documents dans `/var/lib/brother-scan` (accès réservé au service), configuration dans `/etc/brother-scan`.
 
 ## Développement
